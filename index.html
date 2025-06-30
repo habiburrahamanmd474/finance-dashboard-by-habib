@@ -1,0 +1,1583 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ব্যক্তিগত অর্থ ব্যবস্থাপনা ড্যাশবোর্ড</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;700&display=swap" rel="stylesheet">
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.0.0/firebase-app.js";
+        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile } from "https://www.gstatic.com/firebasejs/10.0.0/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, query, getDocs, setLogLevel } from "https://www.gstatic.com/firebasejs/10.0.0/firebase-firestore.js";
+
+        // Set Firebase Firestore debug level for more detailed logging
+        setLogLevel('debug');
+
+        let app;
+        let db;
+        let auth;
+        let userId = null; // User ID will be null initially, set upon login/signup
+        let userEmail = null;
+        let userName = null;
+        let currentMonthYear = ''; // Stores selected month-year for data
+        let incomeExpenseChart;
+        let expenseBreakdownChart;
+        let financialTrendsChart;
+
+        // Financial data object structure
+        const financialData = {
+            income: { salary: 0, extra: 0, bonus: 0 },
+            fixed: { rent: 0, utilities: 0, internet: 0, fees: 0, emi: 0 },
+            variable: { food: 0, transport: 0, medical: 0, clothing: 0, social: 0 },
+            budget: { rent: 0, utilities: 0, internet: 0, fees: 0, emi: 0, food: 0, transport: 0, medical: 0, clothing: 0, social: 0 },
+            savings: { monthly_amount: 0, emergency_fund: 0, bank_deposits: 0, gold_assets: 0 },
+            investments: { fdr: 0, shares: 0, land: 0, business: 0 },
+            loans: { current_outstanding: 0, credit_card_bill: 0, monthly_payment: 0 }
+        };
+
+        // Firebase Configuration - REPLACE WITH YOUR ACTUAL FIREBASE PROJECT CONFIG
+        // This config allows your app to connect to YOUR Firebase project.
+        const firebaseConfig = {
+          apiKey: "AIzaSyDgp5CUUZqLOmvyEVouiGyrXHVxBMS05NU", // Your Firebase Web API Key
+          authDomain: "my-finance-dashboard-6c875.firebaseapp.com", // Your project's Auth Domain
+          projectId: "my-finance-dashboard-6c875", // Your Project ID
+          storageBucket: "my-finance-dashboard-6c875.firebasestorage.app",
+          messagingSenderId: "26439617926",
+          appId: "1:26439617926:web:f7a5e2270c6c217690b007"
+          // measurementId: "G-XXXXXXXXXX" // Optional: if you use Google Analytics
+        };
+        // END Firebase Configuration
+
+        // Function to format currency in Bangladeshi Taka
+        const formatCurrency = (amount) => {
+            return `৳${new Intl.NumberFormat('bn-BD').format(amount)}`;
+        };
+
+        // Get value from input field by ID
+        const getValue = (id) => {
+            const element = document.getElementById(id);
+            return element && element.value ? parseFloat(element.value) : 0;
+        };
+
+        // Set value to input field by ID
+        const setValue = (id, value) => {
+            const element = document.getElementById(id);
+            if (element) {
+                element.value = value;
+            }
+        };
+
+        // Display messages to the user in specific UI elements
+        const displayMessage = (id, message, type) => {
+            const element = document.getElementById(id);
+            if (element) {
+                element.textContent = message;
+                element.className = `text-sm mt-2 ${type === 'success' ? 'text-green-600' : type === 'error' ? 'text-red-600' : 'text-blue-600'}`;
+            }
+            // Clear message after 5 seconds if not a 'loading' type message
+            if (type !== 'loading') {
+                setTimeout(() => {
+                    if (element) element.textContent = '';
+                }, 5000);
+            }
+        };
+
+        // Asynchronously saves all financial data to Firestore
+        const saveFinancialData = async () => {
+            // Check if Firebase is initialized and user is logged in
+            if (!db || !userId || !currentMonthYear) {
+                console.error("Firestore not initialized or user/month not set. Cannot save data.");
+                displayMessage('saveStatusMessage', 'ত্রুটি: ডেটা সেভ করা যায়নি।', 'error');
+                return;
+            }
+
+            // Show saving status message
+            displayMessage('saveStatusMessage', 'সেভ করা হচ্ছে...', 'loading');
+
+            // Update financialData object with current input values
+            financialData.income.salary = getValue('income_salary');
+            financialData.income.extra = getValue('income_extra');
+            financialData.income.bonus = getValue('income_bonus');
+
+            financialData.fixed.rent = getValue('fixed_rent');
+            financialData.fixed.utilities = getValue('fixed_utilities');
+            financialData.fixed.internet = getValue('fixed_internet');
+            financialData.fixed.fees = getValue('fixed_fees');
+            financialData.fixed.emi = getValue('fixed_emi');
+
+            financialData.variable.food = getValue('var_food');
+            financialData.variable.transport = getValue('var_transport');
+            financialData.variable.medical = getValue('var_medical');
+            financialData.variable.clothing = getValue('var_clothing');
+            financialData.variable.social = getValue('var_social');
+
+            financialData.budget.rent = getValue('budget_rent');
+            financialData.budget.utilities = getValue('budget_utilities');
+            financialData.budget.internet = getValue('budget_internet');
+            financialData.budget.fees = getValue('budget_fees');
+            financialData.budget.emi = getValue('budget_emi');
+            financialData.budget.food = getValue('budget_food');
+            financialData.budget.transport = getValue('budget_transport');
+            financialData.budget.medical = getValue('budget_medical');
+            financialData.budget.clothing = getValue('budget_clothing');
+            financialData.budget.social = getValue('budget_social');
+
+            financialData.savings.monthly_amount = getValue('savings_monthly_amount');
+            financialData.savings.emergency_fund = getValue('savings_emergency_fund');
+            financialData.savings.bank_deposits = getValue('savings_bank_deposits');
+            financialData.savings.gold_assets = getValue('savings_gold_assets');
+
+            financialData.investments.fdr = getValue('investments_fdr');
+            financialData.investments.shares = getValue('investments_shares');
+            financialData.investments.land = getValue('investments_land');
+            financialData.investments.business = getValue('investments_business');
+
+            financialData.loans.current_outstanding = getValue('loans_current_outstanding');
+            financialData.loans.credit_card_bill = getValue('loans_current_outstanding'); // Assuming current_outstanding is total liability including credit card bill. If not, adjust.
+            financialData.loans.monthly_payment = getValue('loans_monthly_payment');
+
+            // Reference to the specific user's financial data document for the current month
+            const docRef = doc(db, `artifacts/${firebaseConfig.projectId}/users/${userId}/financialData`, currentMonthYear);
+            try {
+                await setDoc(docRef, financialData); // Use setDoc to save/overwrite data
+                console.log(`Data saved for ${currentMonthYear} for user ${userId}`);
+                displayMessage('saveStatusMessage', 'সফলভাবে সেভ করা হয়েছে!', 'success');
+            } catch (e) {
+                console.error("Error writing document: ", e);
+                displayMessage('saveStatusMessage', `ত্রুটি: ডেটা সেভ করা যায়নি। (${e.message})`, 'error');
+            }
+        };
+
+        // Asynchronously loads financial data for the current month from Firestore
+        const loadFinancialData = async () => {
+            if (!db || !userId || !currentMonthYear) {
+                console.warn("Firestore not initialized or user/month not set. Cannot load data.");
+                return;
+            }
+
+            const docRef = doc(db, `artifacts/${firebaseConfig.projectId}/users/${userId}/financialData`, currentMonthYear);
+            
+            // onSnapshot provides real-time updates and initial data load
+            onSnapshot(docRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    // Load data into financialData object, using existing defaults if a field is missing
+                    financialData.income = data.income || {};
+                    financialData.fixed = data.fixed || {};
+                    financialData.variable = data.variable || {};
+                    financialData.budget = data.budget || {};
+                    financialData.savings = data.savings || {};
+                    financialData.investments = data.investments || {};
+                    financialData.loans = data.loans || {};
+
+                    // Ensure all sub-objects have their default properties if they were null/undefined from Firestore
+                    for (const key in financialData.income) financialData.income[key] = data.income?.[key] ?? 0;
+                    for (const key in financialData.fixed) financialData.fixed[key] = data.fixed?.[key] ?? 0;
+                    for (const key in financialData.variable) financialData.variable[key] = data.variable?.[key] ?? 0;
+                    for (const key in financialData.budget) financialData.budget[key] = data.budget?.[key] ?? 0;
+                    for (const key in financialData.savings) financialData.savings[key] = data.savings?.[key] ?? 0;
+                    for (const key in financialData.investments) financialData.investments[key] = data.investments?.[key] ?? 0;
+                    for (const key in financialData.loans) financialData.loans[key] = data.loans?.[key] ?? 0;
+
+
+                    // Update input fields with loaded data
+                    setValue('income_salary', financialData.income.salary);
+                    setValue('income_extra', financialData.income.extra);
+                    setValue('income_bonus', financialData.income.bonus);
+
+                    setValue('fixed_rent', financialData.fixed.rent);
+                    setValue('fixed_utilities', financialData.fixed.utilities);
+                    setValue('fixed_internet', financialData.fixed.internet);
+                    setValue('fixed_fees', financialData.fixed.fees);
+                    setValue('fixed_emi', financialData.fixed.emi);
+
+                    setValue('var_food', financialData.variable.food);
+                    setValue('var_transport', financialData.variable.transport);
+                    setValue('var_medical', financialData.variable.medical);
+                    setValue('var_clothing', financialData.variable.clothing);
+                    setValue('var_social', financialData.variable.social);
+
+                    setValue('budget_rent', financialData.budget.rent);
+                    setValue('budget_utilities', financialData.budget.utilities);
+                    setValue('budget_internet', financialData.budget.internet);
+                    setValue('budget_fees', financialData.budget.fees);
+                    setValue('budget_emi', financialData.budget.emi);
+                    setValue('budget_food', financialData.budget.food);
+                    setValue('budget_transport', financialData.budget.transport);
+                    setValue('budget_medical', financialData.budget.medical);
+                    setValue('budget_clothing', financialData.budget.clothing);
+                    setValue('budget_social', financialData.budget.social);
+
+                    setValue('savings_monthly_amount', financialData.savings.monthly_amount);
+                    setValue('savings_emergency_fund', financialData.savings.emergency_fund);
+                    setValue('savings_bank_deposits', financialData.savings.bank_deposits);
+                    setValue('savings_gold_assets', financialData.savings.gold_assets);
+
+                    setValue('investments_fdr', financialData.investments.fdr);
+                    setValue('investments_shares', financialData.investments.shares);
+                    setValue('investments_land', financialData.investments.land);
+                    setValue('investments_business', financialData.investments.business);
+
+                    setValue('loans_current_outstanding', financialData.loans.current_outstanding);
+                    setValue('loans_credit_card_bill', financialData.loans.credit_card_bill);
+                    setValue('loans_monthly_payment', financialData.loans.monthly_payment);
+                    
+                    console.log(`Data loaded for ${currentMonthYear} for user ${userId}`);
+                } else {
+                    console.log(`No data found for ${currentMonthYear} for user ${userId}. Resetting inputs.`);
+                    resetInputs(); // Reset inputs to zero if no data for the current month
+                }
+                updateDashboard(); // Update charts and displays after loading data
+                loadAndRenderTrends(); // Load historical trends data
+            }, (error) => {
+                console.error("Error fetching document snapshot: ", error);
+                displayMessage('saveStatusMessage', `ত্রুটি: ডেটা লোড করা যায়নি। (${error.message})`, 'error');
+            });
+        };
+
+        // Resets all input fields and the financialData object to zero
+        const resetInputs = () => {
+            const inputs = document.querySelectorAll('.financial-input');
+            inputs.forEach(input => {
+                input.value = 0;
+            });
+            // Reset the internal financialData object as well
+            financialData.income = { salary: 0, extra: 0, bonus: 0 };
+            financialData.fixed = { rent: 0, utilities: 0, internet: 0, fees: 0, emi: 0 };
+            financialData.variable = { food: 0, transport: 0, medical: 0, clothing: 0, social: 0 };
+            financialData.budget = { rent: 0, utilities: 0, internet: 0, fees: 0, emi: 0, food: 0, transport: 0, medical: 0, clothing: 0, social: 0 };
+            financialData.savings = { monthly_amount: 0, emergency_fund: 0, bank_deposits: 0, gold_assets: 0 };
+            financialData.investments = { fdr: 0, shares: 0, land: 0, business: 0 };
+            financialData.loans = { current_outstanding: 0, credit_card_bill: 0, monthly_payment: 0 };
+            updateDashboard(); // Update dashboard display with reset values
+            // No saveFinancialData() call here, as it's typically called after initial load if no data exists
+        };
+
+        // Calculates and displays the financial health score based on current data
+        const calculateFinancialHealthScore = () => {
+            const totalIncome = financialData.income.salary + financialData.income.extra + financialData.income.bonus;
+            const totalExpense = (financialData.fixed.rent + financialData.fixed.utilities + financialData.fixed.internet + financialData.fixed.fees + financialData.fixed.emi) +
+                                 (financialData.variable.food + financialData.variable.transport + financialData.variable.medical + financialData.variable.clothing + financialData.variable.social);
+            const totalSavings = financialData.savings.monthly_amount + financialData.savings.emergency_fund + financialData.savings.bank_deposits + financialData.savings.gold_assets;
+            const totalInvestments = financialData.investments.fdr + financialData.investments.shares + financialData.investments.land + financialData.investments.business;
+            const totalLiabilities = financialData.loans.current_outstanding + financialData.loans.credit_card_bill;
+
+            let score = 0;
+
+            // Score based on Income vs Expense
+            if (totalIncome > 0) {
+                if (totalExpense < totalIncome) {
+                    score += 30; // Good if expense is less than income
+                } else if (totalExpense === totalIncome) {
+                    score += 15; // Neutral if expense equals income
+                }
+            } else if (totalIncome === 0 && totalExpense === 0 && totalSavings > 0) {
+                score += 30; // Some savings without income/expense also indicates good health
+            }
+
+            // Score based on Savings Ratio
+            if (totalIncome > 0) {
+                const savingsRatio = totalSavings / totalIncome;
+                if (savingsRatio >= 0.20) score += 30; // High savings
+                else if (savingsRatio >= 0.10) score += 20; // Moderate savings
+                else if (savingsRatio > 0) score += 10; // Some savings
+            }
+
+            // Score based on Debt (lower debt is better)
+            if (totalIncome > 0) {
+                const debtToIncomeRatio = totalLiabilities / totalIncome;
+                if (totalLiabilities === 0) score += 20; // No debt
+                else if (debtToIncomeRatio <= 0.5) score += 10; // Manageable debt
+                else if (debtToIncomeRatio <= 1.0) score += 5; // Higher debt
+            } else if (totalLiabilities === 0) {
+                 score += 20; // No income but no debt is still positive
+            }
+
+            // Score based on Investments
+            if (totalInvestments > 0) {
+                score += 20; // Any investment adds to score
+            }
+
+            // Normalize score to max 100 (if individual components exceed 100)
+            score = Math.min(score, 100); 
+
+            // Determine health status text
+            let healthStatus = '';
+            if (score >= 80) healthStatus = 'Excellent';
+            else if (score >= 60) healthStatus = 'Good';
+            else if (score >= 40) healthStatus = 'Average';
+            else healthStatus = 'Needs Improvement';
+
+            // Update display elements
+            document.getElementById('financialHealthScoreDisplay').textContent = `${score.toFixed(0)} (${healthStatus})`;
+            document.getElementById('totalSavingsDisplay').textContent = formatCurrency(totalSavings + totalInvestments);
+            document.getElementById('totalLiabilitiesDisplay').textContent = formatCurrency(totalLiabilities);
+        };
+
+        // Calculates and displays estimated debt repayment time
+        const calculateDebtRepayment = () => {
+            const currentOutstanding = financialData.loans.current_outstanding + financialData.loans.credit_card_bill;
+            const monthlyPayment = financialData.loans.monthly_payment;
+
+            let estimatedMonths = 0;
+            if (monthlyPayment > 0) {
+                estimatedMonths = currentOutstanding / monthlyPayment;
+            }
+            
+            const repaymentDisplay = document.getElementById('debtRepaymentDisplay');
+            if (currentOutstanding === 0) {
+                repaymentDisplay.textContent = 'কোন ঋণ নেই!';
+            } else if (monthlyPayment === 0) {
+                repaymentDisplay.textContent = 'মাসিক পরিশোধ যোগ করুন';
+            } else {
+                repaymentDisplay.textContent = `${estimatedMonths.toFixed(1)} মাস`;
+            }
+        };
+
+        // Updates all dashboard display elements and charts
+        const updateDashboard = () => {
+            const totalIncome = financialData.income.salary + financialData.income.extra + financialData.income.bonus;
+            
+            const totalFixed = financialData.fixed.rent + financialData.fixed.utilities + financialData.fixed.internet + financialData.fixed.fees + financialData.fixed.emi;
+            const totalVariable = financialData.variable.food + financialData.variable.transport + financialData.variable.medical + financialData.variable.clothing + financialData.variable.social;
+            const totalExpense = totalFixed + totalVariable;
+            const netSavings = totalIncome - totalExpense;
+
+            // Update main financial summary displays
+            document.getElementById('totalIncomeDisplay').textContent = formatCurrency(totalIncome);
+            document.getElementById('totalExpenseDisplay').textContent = formatCurrency(totalExpense);
+            document.getElementById('netSavingsDisplay').textContent = formatCurrency(netSavings);
+
+            // Update Income vs Expense Donut Chart
+            incomeExpenseChart.data.datasets[0].data[0] = Math.max(0, netSavings); // Remaining balance
+            incomeExpenseChart.data.datasets[0].data[1] = totalExpense; // Total expenses
+            incomeExpenseChart.update();
+
+            // Aggregate 'Other Expenses' for pie chart
+            const otherFixed = financialData.fixed.internet + financialData.fixed.fees + financialData.fixed.emi;
+            const otherVariable = financialData.variable.medical + financialData.variable.clothing + financialData.variable.social;
+            const otherExpenses = otherFixed + otherVariable;
+
+            // Update Expense Breakdown Pie Chart
+            expenseBreakdownChart.data.datasets[0].data = [
+                financialData.fixed.rent,
+                financialData.fixed.utilities,
+                financialData.variable.transport,
+                financialData.variable.food,
+                otherExpenses
+            ];
+            expenseBreakdownChart.update();
+
+            // Update Budget Progress Bars
+            updateBudgetProgress('budget_rent_progress', financialData.fixed.rent, financialData.budget.rent);
+            updateBudgetProgress('budget_utilities_progress', financialData.fixed.utilities, financialData.budget.utilities);
+            updateBudgetProgress('budget_internet_progress', financialData.fixed.internet, financialData.budget.internet);
+            updateBudgetProgress('budget_fees_progress', financialData.fixed.fees, financialData.budget.fees);
+            updateBudgetProgress('budget_emi_progress', financialData.fixed.emi, financialData.budget.emi);
+            updateBudgetProgress('budget_food_progress', financialData.variable.food, financialData.budget.food);
+            updateBudgetProgress('budget_transport_progress', financialData.variable.transport, financialData.budget.transport);
+            updateBudgetProgress('budget_medical_progress', financialData.variable.medical, financialData.budget.medical);
+            updateBudgetProgress('budget_clothing_progress', financialData.variable.clothing, financialData.budget.clothing);
+            updateBudgetProgress('budget_social_progress', financialData.variable.social, financialData.budget.social);
+
+            // Recalculate and display financial health score and debt repayment
+            calculateFinancialHealthScore();
+            calculateDebtRepayment();
+        };
+
+        // Updates individual budget progress bars
+        const updateBudgetProgress = (id, actual, budget) => {
+            const progressBar = document.getElementById(id);
+            if (!progressBar) return;
+
+            let percentage = (budget > 0) ? (actual / budget) * 100 : 0;
+            // Cap percentage at 100% for display purposes if over budget, but show 100% if budget is zero but spending occurs
+            if (percentage > 100) percentage = 100;
+            if (budget === 0 && actual > 0) percentage = 100;
+
+            progressBar.style.width = `${percentage}%`;
+            // Change color based on budget usage
+            progressBar.classList.remove('bg-green-500', 'bg-yellow-500', 'bg-red-500');
+            if (percentage <= 70) {
+                progressBar.classList.add('bg-green-500');
+            } else if (percentage <= 100) {
+                progressBar.classList.add('bg-yellow-500');
+            } else {
+                progressBar.classList.add('bg-red-500');
+            }
+
+            // Display actual/budget values and percentage
+            const textElement = progressBar.nextElementSibling;
+            if (textElement) {
+                textElement.textContent = `${formatCurrency(actual)} / ${formatCurrency(budget)} (${percentage.toFixed(1)}%)`;
+            }
+        };
+
+        // Loads and renders historical financial trends from Firestore
+        const loadAndRenderTrends = async () => {
+            if (!db || !userId) {
+                console.warn("Firestore not initialized or user not set. Cannot load trends.");
+                return;
+            }
+
+            const financeCollectionRef = collection(db, `artifacts/${firebaseConfig.projectId}/users/${userId}/financialData`);
+            try {
+                // Fetch all documents (months) for the current user
+                const querySnapshot = await getDocs(query(financeCollectionRef));
+                const monthlyData = [];
+                querySnapshot.forEach((doc) => {
+                    const monthYear = doc.id; // Document ID is the month-year string (e.g., "2023-01")
+                    const data = doc.data();
+                    // Calculate total income, expense, and net savings for each month
+                    const totalIncome = (data.income?.salary || 0) + (data.income?.extra || 0) + (data.income?.bonus || 0);
+                    const totalExpense = (data.fixed?.rent || 0) + (data.fixed?.utilities || 0) + (data.fixed?.internet || 0) + (data.fixed?.fees || 0) + (data.fixed?.emi || 0) +
+                                         (data.variable?.food || 0) + (data.variable?.transport || 0) + (data.variable?.medical || 0) + (data.variable?.clothing || 0) + (data.variable?.social || 0);
+                    const netSavings = totalIncome - totalExpense;
+                    monthlyData.push({ monthYear, totalIncome, totalExpense, netSavings });
+                });
+
+                // Sort data chronologically by monthYear
+                monthlyData.sort((a, b) => {
+                    const [yearA, monthA] = a.monthYear.split('-').map(Number);
+                    const [yearB, monthB] = b.monthYear.split('-').map(Number);
+                    if (yearA !== yearB) return yearA - yearB;
+                    return monthA - monthB;
+                });
+
+                // Prepare data for Chart.js
+                const labels = monthlyData.map(d => {
+                    const [year, month] = d.monthYear.split('-');
+                    const monthNames = ["জানু", "ফেব্রু", "মার্চ", "এপ্রি", "মে", "জুন", "জুলাই", "আগ", "সেপ্টে", "অক্টো", "নভে", "ডিসেম্ব"];
+                    return `${monthNames[parseInt(month) - 1]} ${year}`; // Format month-year for display
+                });
+                const incomes = monthlyData.map(d => d.totalIncome);
+                const expenses = monthlyData.map(d => d.totalExpense);
+                const savings = monthlyData.map(d => d.netSavings);
+
+                financialTrendsChart.data.labels = labels;
+                financialTrendsChart.data.datasets[0].data = incomes;
+                financialTrendsChart.data.datasets[1].data = expenses;
+                financialTrendsChart.data.datasets[2].data = savings;
+                financialTrendsChart.update();
+
+            } catch (error) {
+                console.error("Error loading historical data: ", error);
+            }
+        };
+
+        // Generates financial insights and advice using Gemini API
+        const generateFinancialInsight = async () => {
+            const insightDisplay = document.getElementById('aiInsightDisplay');
+            const generateButton = document.getElementById('generateInsightButton');
+            insightDisplay.textContent = 'বিশ্লেষণ তৈরি হচ্ছে...'; // Show loading message
+            generateButton.disabled = true; // Disable button during API call
+
+            // Gather current financial data for the AI prompt
+            const totalIncome = financialData.income.salary + financialData.income.extra + financialData.income.bonus;
+            const totalFixedExpense = financialData.fixed.rent + financialData.fixed.utilities + financialData.fixed.internet + financialData.fixed.fees + financialData.fixed.emi;
+            const totalVariableExpense = financialData.variable.food + financialData.variable.transport + financialData.variable.medical + financialData.variable.clothing + financialData.variable.social;
+            const totalExpense = totalFixedExpense + totalVariableExpense;
+            const netSavings = totalIncome - totalExpense;
+            const totalLiabilities = financialData.loans.current_outstanding + financialData.loans.credit_card_bill;
+            const monthlyLoanPayment = financialData.loans.monthly_payment;
+
+            let analysisText = `আপনার বর্তমান মাসিক আয় ${formatCurrency(totalIncome)}। মোট খরচ ${formatCurrency(totalExpense)}, যার মধ্যে নির্ধারিত খরচ ${formatCurrency(totalFixedExpense)} এবং পরিবর্তনশীল খরচ ${formatCurrency(totalVariableExpense)}। আপনার মাসিক সঞ্চয় ${formatCurrency(netSavings)}। মোট ঋণ ${formatCurrency(totalLiabilities)}।`;
+            
+            // Add contextual text based on financial situation
+            if (netSavings < 0) {
+                analysisText += ` দুঃখজনকভাবে, আপনার খরচ আপনার আয়ের চেয়ে বেশি। এটি একটি গুরুতর সমস্যা যা দ্রুত সমাধান করা প্রয়োজন।`;
+            } else if (netSavings === 0) {
+                analysisText += ` আপনার আয় এবং খরচ প্রায় সমান, যা ভবিষ্যতের জন্য চ্যালেঞ্জিং হতে পারে।`;
+            } else if (netSavings > 0) {
+                analysisText += ` আপনার একটি ইতিবাচক মাসিক সঞ্চয় আছে, যা একটি ভালো লক্ষণ।`;
+            }
+
+            // Add debt repayment context
+            if (totalLiabilities > 0 && monthlyLoanPayment === 0) {
+                analysisText += ` আপনার ঋণ রয়েছে কিন্তু মাসিক পরিশোধের তথ্য দেওয়া হয়নি, যা ঋণমুক্তির পরিকল্পনা কঠিন করে তুলছে।`;
+            } else if (totalLiabilities > 0 && monthlyLoanPayment > 0) {
+                 const estimatedMonths = totalLiabilities / monthlyLoanPayment;
+                 analysisText += ` আপনার বর্তমান ঋণ ${formatCurrency(totalLiabilities)} এবং মাসিক পরিশোধ ${formatCurrency(monthlyLoanPayment)}। আনুমানিক ${estimatedMonths.toFixed(1)} মাসের মধ্যে আপনি ঋণমুক্ত হতে পারবেন।`;
+            }
+
+            // Check for overspent budget categories
+            let overspentCategories = [];
+            if (financialData.budget.food > 0 && financialData.variable.food > financialData.budget.food) { overspentCategories.push("খাবার"); }
+            if (financialData.budget.transport > 0 && financialData.variable.transport > financialData.budget.transport) { overspentCategories.push("যাতায়াত"); }
+            if (financialData.budget.medical > 0 && financialData.variable.medical > financialData.budget.medical) { overspentCategories.push("চিকিৎসা"); }
+            if (financialData.budget.clothing > 0 && financialData.variable.clothing > financialData.budget.clothing) { overspentCategories.push("জামাকাপড়"); }
+            if (financialData.budget.social > 0 && financialData.variable.social > financialData.budget.social) { overspentCategories.push("সামাজিক খরচ"); }
+
+            if (overspentCategories.length > 0) {
+                analysisText += ` এই মাসে আপনি ${overspentCategories.join(', ')} খাতে বাজেটের চেয়ে বেশি খরচ করেছেন।`;
+            } else {
+                analysisText += ` এই মাসে আপনি বাজেটের মধ্যে আপনার পরিবর্তনশীল খরচগুলো নিয়ন্ত্রণে রেখেছেন।`;
+            }
+
+            // Construct the prompt for the LLM
+            const prompt = `একজন আর্থিক উপদেষ্টার মতো, এই আর্থিক ডেটার উপর ভিত্তি করে একটি সংক্ষিপ্ত (৭৫-১০০ শব্দের) বিশ্লেষণ এবং কিছু সুনির্দিষ্ট, কার্যকর পরামর্শ (অন্তত ৩টি বুলেট পয়েন্ট) দিন যা একজন ব্যক্তি তার আর্থিক অবস্থা উন্নত করতে ব্যবহার করতে পারে। পরামর্শগুলো বাস্তবসম্মত এবং সহজবোধ্য হতে হবে। ডেটা: ${analysisText}`;
+
+            try {
+                const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
+                // Gemini API Key - Replace with your actual Gemini API Key from Google AI Studio
+                const apiKey = "AIzaSyAEcFVlX0pwFQ0xQTRU1t3ljDz4IJv2xDo"; 
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+                
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                
+                // Display the AI-generated insight
+                if (result.candidates && result.candidates.length > 0 && result.candidates[0].content && result.candidates[0].content.parts && result.candidates[0].content.parts.length > 0) {
+                    insightDisplay.textContent = result.candidates[0].content.parts[0].text;
+                } else {
+                    insightDisplay.textContent = 'বিশ্লেষণ তৈরি করা যায়নি।';
+                }
+            }
+            catch (error) {
+                console.error("Error generating insight:", error);
+                insightDisplay.textContent = 'বিশ্লেষণ তৈরি করতে সমস্যা হয়েছে।';
+            } finally {
+                generateButton.disabled = false; // Re-enable button
+            }
+        };
+
+        // Categorizes a transaction description using Gemini API and updates the corresponding input field
+        const categorizeTransaction = async () => {
+            const transactionDescription = document.getElementById('transactionDescriptionInput').value;
+            const categorizeButton = document.getElementById('categorizeTransactionButton');
+            const categoryStatus = document.getElementById('categoryStatus');
+            
+            if (!transactionDescription) {
+                categoryStatus.textContent = 'লেনদেনের বিবরণ লিখুন।';
+                return;
+            }
+
+            categoryStatus.textContent = 'ক্যাটাগরি নির্ধারণ করা হচ্ছে...';
+            categorizeButton.disabled = true;
+
+            // Prompt for AI to categorize the transaction
+            const prompt = `একটি আর্থিক লেনদেনের বিবরণ দেওয়া হয়েছে। এটি আপনার ব্যক্তিগত অর্থ ব্যবস্থাপনার ড্যাশবোর্ডে কোন খরচের ক্যাটাগরিতে পড়বে তা JSON ফরম্যাটে একটি স্ট্রিং হিসাবে শুধুমাত্র ক্যাটাগরির নাম দিয়ে দিন। ক্যাটাগরিগুলো হল: 'fixed_rent' (বাসা ভাড়া), 'fixed_utilities' (ইউটিলিটি বিল), 'fixed_internet' (ইন্টারনেট ও ফোন বিল), 'fixed_fees' (স্কুল/কলেজ ফি), 'fixed_emi' (ইএমআই/ঋণের কিস্তি), 'var_food' (খাবার ও রান্না), 'var_transport' (যাতায়াত), 'var_medical' (চিকিৎসা), 'var_clothing' (জামাকাপড়), 'var_social' (সামাজিক খরচ)। যদি কোনো ক্যাটাগরিতে না পড়ে, তবে 'var_social' দিন। উদাহরণ: "বাজার থেকে চাল কিনলাম" -> {"category": "var_food"}। লেনদেনের বিবরণ: "${transactionDescription}"`;
+
+            try {
+                const payload = { 
+                    contents: [{ role: "user", parts: [{ text: prompt }] }],
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: "OBJECT",
+                            properties: {
+                                "category": { "type": "STRING" }
+                            },
+                            required: ["category"]
+                        }
+                    }
+                };
+                // Gemini API Key - Replace with your actual Gemini API Key
+                const apiKey = "AIzaSyAEcFVlX0pwFQ0xQTRU1t3ljDz4IJv2xDo"; 
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                
+                // Parse AI response and update corresponding input field
+                if (result.candidates && result.candidates.length > 0 && result.candidates[0].content && result.candidates[0].content.parts && result.candidates[0].content.parts.length > 0) {
+                    const jsonResponse = JSON.parse(result.candidates[0].content.parts[0].text);
+                    const suggestedCategory = jsonResponse.category;
+
+                    const targetInput = document.getElementById(suggestedCategory);
+                    if (targetInput) {
+                        targetInput.value = parseFloat(targetInput.value || 0) + 1; // Increment by 1 or add a default amount if needed
+                        categoryStatus.textContent = `ক্যাটাগরি: ${targetInput.previousElementSibling.textContent.split(':')[0]} (মান বৃদ্ধি করা হলো)`;
+                        updateDashboard(); // Update dashboard display
+                        saveFinancialData(); // Save changes
+                    } else {
+                        categoryStatus.textContent = `ক্যাটাগরি খুঁজে পাওয়া যায়নি: ${suggestedCategory}`;
+                    }
+                } else {
+                    categoryStatus.textContent = 'ক্যাটাগরি নির্ধারণ করা যায়নি।';
+                }
+            } catch (error) {
+                console.error("Error categorizing transaction:", error);
+                categoryStatus.textContent = 'ক্যাটাগরি নির্ধারণে সমস্যা হয়েছে।';
+            } finally {
+                categorizeButton.disabled = false;
+            }
+        };
+
+
+        // Generates a PDF summary of the current financial data
+        const generatePdfSummary = () => {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+
+            // jsPDF has limited support for complex Unicode characters like Bengali without font embedding.
+            // For proper Bengali rendering, you would need to:
+            // 1. Obtain a .ttf font file that supports Bengali (e.g., Noto Sans Bengali).
+            // 2. Convert it to a Base64 string and generate font metrics (can be done with tools like jsPDF's fontconverter.js).
+            // 3. Use doc.addFont() to add the font to jsPDF's internal Virtual File System (vFS).
+            // 4. Set the font using doc.setFont('YourBengaliFontName', 'normal').
+            // This process typically involves external files and is complex for a single HTML file.
+            // We are setting 'sans-serif' as a best effort, relying on the client's system fonts.
+            doc.setFont('sans-serif', 'normal'); 
+            doc.setFontSize(16);
+            doc.text('ব্যক্তিগত অর্থ ব্যবস্থাপনার সারাংশ', 105, 20, null, null, 'center');
+
+            doc.setFontSize(12);
+            const currentMonthText = document.getElementById('monthSelect').options[document.getElementById('monthSelect').selectedIndex].text;
+            const currentYearText = document.getElementById('yearSelect').value;
+            doc.text(`মাস: ${currentMonthText}, ${currentYearText}`, 10, 30);
+            // Display username if available, otherwise User ID
+            const userDisplayForPdf = userName || userEmail || userId;
+            doc.text(`ব্যবহারকারী: ${userDisplayForPdf}`, 10, 37);
+
+            let yOffset = 50;
+
+            // Helper function to add sections to PDF
+            const addSection = (title, content) => {
+                doc.setFontSize(14);
+                doc.text(title, 10, yOffset);
+                yOffset += 7;
+                doc.setFontSize(12);
+                const lines = doc.splitTextToSize(content, 180); // Auto-wrap text
+                doc.text(lines, 15, yOffset);
+                yOffset += (lines.length * 7) + 5; // Adjust Y offset for next section
+            };
+
+            // Gather data for PDF summary
+            const totalIncome = financialData.income.salary + financialData.income.extra + financialData.income.bonus;
+            const totalFixedExpense = financialData.fixed.rent + financialData.fixed.utilities + financialData.fixed.internet + financialData.fixed.fees + financialData.fixed.emi;
+            const totalVariableExpense = financialData.variable.food + financialData.variable.transport + financialData.variable.medical + financialData.variable.clothing + financialData.variable.social;
+            const totalExpense = totalFixedExpense + totalVariableExpense;
+            const netSavings = totalIncome - totalExpense;
+            const totalSavingsAssets = financialData.savings.monthly_amount + financialData.savings.emergency_fund + financialData.savings.bank_deposits + financialData.savings.gold_assets;
+            const totalInvestmentsAssets = financialData.investments.fdr + financialData.investments.shares + financialData.investments.land + financialData.investments.business;
+            const totalLiabilities = financialData.loans.current_outstanding + financialData.loans.credit_card_bill;
+            const monthlyLoanPayment = financialData.loans.monthly_payment;
+            
+            const financialHealthScoreText = document.getElementById('financialHealthScoreDisplay').textContent;
+
+            // Add sections to PDF
+            addSection('১. আর্থিক সারসংক্ষেপ:',
+                `মোট আয়: ${formatCurrency(totalIncome)}\n` +
+                `মোট খরচ: ${formatCurrency(totalExpense)}\n` +
+                `মাসিক সঞ্চয়: ${formatCurrency(netSavings)}\n` +
+                `আর্থিক স্বাস্থ্য স্কোর: ${financialHealthScoreText}`
+            );
+
+            addSection('২. সঞ্চয় ও বিনিয়োগ:',
+                `মোট সঞ্চিত সম্পদ: ${formatCurrency(totalSavingsAssets)}\n` +
+                `মোট বিনিয়োগ: ${formatCurrency(totalInvestmentsAssets)}`
+            );
+
+            let loanContent = `মোট বকেয়া ঋণ: ${formatCurrency(totalLiabilities)}`;
+            if (totalLiabilities > 0 && monthlyLoanPayment > 0) {
+                const estimatedMonths = totalLiabilities / monthlyLoanPayment;
+                loanContent += `\n আনুমানিক ঋণ পরিশোধের সময়: ${estimatedMonths.toFixed(1)} মাস`;
+            } else if (totalLiabilities === 0) {
+                loanContent += `\nকোন ঋণ নেই!`;
+            }
+            addSection('৩. ঋণ ও দায়:', loanContent);
+
+            addSection('৪. প্রধান খরচসমূহ (পরিবর্তনশীল ও নির্ধারিত):',
+                `বাসা ভাড়া: ${formatCurrency(financialData.fixed.rent)}\n` +
+                `ইউটিলিটি বিল: ${formatCurrency(financialData.fixed.utilities)}\n` +
+                `ইন্টারনেট ও ফোন বিল: ${formatCurrency(financialData.fixed.internet)}\n` +
+                `স্কুল/কলেজ ফি: ${formatCurrency(financialData.fixed.fees)}\n` +
+                `ইএমআই/ঋণের কিস্তি: ${formatCurrency(financialData.fixed.emi)}\n` +
+                `খাবার ও রান্না: ${formatCurrency(financialData.variable.food)}\n` +
+                `যাতায়াত: ${formatCurrency(financialData.variable.transport)}\n` +
+                `চিকিৎসা: ${formatCurrency(financialData.variable.medical)}\n` +
+                `জামাকাপড়: ${formatCurrency(financialData.variable.clothing)}\n` +
+                `সামাজিক খরচ: ${formatCurrency(financialData.variable.social)}`
+            );
+
+            // Save the generated PDF
+            doc.save(`অর্থ_ব্যবস্থাপনা_সারাংশ_${currentMonthYear}.pdf`);
+        };
+
+        // --- Authentication UI and State Management ---
+        const authContainer = document.getElementById('auth-container');
+        const mainDashboard = document.getElementById('main-dashboard');
+        const loginForm = document.getElementById('login-form');
+        const signupForm = document.getElementById('signup-form');
+        const authMessage = document.getElementById('auth-message');
+
+        // Shows the authentication (login/signup) UI
+        const showAuthUI = () => {
+            console.log("showAuthUI: Displaying authentication UI.");
+            authContainer.style.display = 'flex'; // Use flex to center
+            mainDashboard.style.display = 'none';
+            loginForm.style.display = 'block';
+            signupForm.style.display = 'none';
+            // Clear input fields for authentication
+            document.getElementById('email-login').value = '';
+            document.getElementById('password-login').value = '';
+            document.getElementById('name-signup').value = '';
+            document.getElementById('email-signup').value = '';
+            document.getElementById('password-signup').value = '';
+            displayMessage('auth-message', '', ''); // Clear auth messages
+        };
+
+        // Shows the main dashboard UI
+        const showDashboardUI = async () => {
+            console.log("showDashboardUI: Attempting to display dashboard UI.");
+            authContainer.style.display = 'none';
+            mainDashboard.style.display = 'block';
+            console.log("showDashboardUI: mainDashboard display set to 'block'. authContainer display set to 'none'.");
+
+            document.getElementById('userDisplayName').textContent = userName || userEmail || 'ব্যবহারকারী';
+            // Set initial month/year for the dashboard when user logs in
+            const today = new Date();
+            document.getElementById('monthSelect').value = (today.getMonth() + 1).toString().padStart(2, '0');
+            document.getElementById('yearSelect').value = today.getFullYear().toString();
+            currentMonthYear = `${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}`;
+            
+            // Adding a slight delay before loading data to ensure UI elements are rendered
+            // This is a common workaround for display issues after state changes, though usually not strictly necessary with direct style manipulation.
+            setTimeout(() => {
+                console.log("showDashboardUI: Calling loadFinancialData after a short delay.");
+                loadFinancialData(); // Load financial data for the current user and selected month
+            }, 100); // 100ms delay
+        };
+
+        // Event listener for showing signup form
+        document.getElementById('show-signup-btn').addEventListener('click', () => {
+            loginForm.style.display = 'none';
+            signupForm.style.display = 'block';
+            displayMessage('auth-message', '', '');
+        });
+
+        // Event listener for showing login form
+        document.getElementById('show-login-btn').addEventListener('click', () => {
+            loginForm.style.display = 'block';
+            signupForm.style.display = 'none';
+            displayMessage('auth-message', '', '');
+        });
+
+        // Event listener for login button click
+        document.getElementById('login-btn').addEventListener('click', async () => {
+            const email = document.getElementById('email-login').value;
+            const password = document.getElementById('password-login').value;
+            if (!email || !password) {
+                displayMessage('auth-message', 'ইমেল এবং পাসওয়ার্ড লিখুন।', 'error');
+                return;
+            }
+            displayMessage('auth-message', 'লগইন করা হচ্ছে...', 'loading');
+            try {
+                console.log("Attempting to sign in with email/password...");
+                await signInWithEmailAndPassword(auth, email, password);
+                console.log("Sign-in successful!");
+                displayMessage('auth-message', 'সফলভাবে লগইন করা হয়েছে!', 'success');
+                // The onAuthStateChanged listener will now detect the user and call showDashboardUI
+            } catch (error) {
+                console.error("Login failed:", error);
+                displayMessage('auth-message', `লগইন ব্যর্থ: ${error.message}`, 'error');
+            }
+        });
+
+        // Event listener for signup button click
+        document.getElementById('signup-btn').addEventListener('click', async () => {
+            const name = document.getElementById('name-signup').value;
+            const email = document.getElementById('email-signup').value;
+            const password = document.getElementById('password-signup').value;
+            if (!name || !email || !password) {
+                displayMessage('auth-message', 'নাম, ইমেল এবং পাসওয়ার্ড লিখুন।', 'error');
+                return;
+            }
+            displayMessage('auth-message', 'সাইন আপ করা হচ্ছে...', 'loading');
+            try {
+                console.log("Attempting to create user with email/password...");
+                const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                userId = userCredential.user.uid;
+                userEmail = userCredential.user.email;
+                userName = name;
+
+                // Save user profile (name) to Firestore
+                const profileDocRef = doc(db, `artifacts/${firebaseConfig.projectId}/users/${userId}/profile`, 'userProfile');
+                await setDoc(profileDocRef, { name: name, email: email });
+                console.log("User profile saved to Firestore.");
+
+                // Update Auth profile with display name (optional but good practice for user.displayName)
+                await updateProfile(userCredential.user, { displayName: name });
+                console.log("Auth display name updated.");
+
+                displayMessage('auth-message', 'সফলভাবে সাইন আপ করা হয়েছে!', 'success');
+                // The onAuthStateChanged listener will now detect the user and call showDashboardUI
+            } catch (error) {
+                console.error("Signup failed:", error);
+                displayMessage('auth-message', `সাইন আপ ব্যর্থ: ${error.message}`, 'error');
+            }
+        });
+
+        // Event listener for sign out button
+        document.getElementById('signout-btn').addEventListener('click', async () => {
+            try {
+                await signOut(auth);
+                console.log("Signed out successfully.");
+                // The onAuthStateChanged listener will now detect no user and call showAuthUI
+            } catch (error) {
+                console.error("Sign out failed:", error);
+            }
+        });
+
+        // --- Main DOM Content Loaded Event Listener ---
+        document.addEventListener('DOMContentLoaded', async () => {
+            console.log("DOMContentLoaded: Initializing Firebase and Charts.");
+            // Initialize Firebase App, Firestore, and Auth
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+
+            // Initialize all Chart.js instances
+            const ctxIncomeExpense = document.getElementById('incomeExpenseChart').getContext('2d');
+            incomeExpenseChart = new Chart(ctxIncomeExpense, {
+                type: 'doughnut',
+                data: {
+                    labels: ['অবশিষ্ট', 'মোট খরচ'],
+                    datasets: [{
+                        data: [1, 0],
+                        backgroundColor: ['#A3B18A', '#DDA15E'],
+                        borderColor: '#FFFFFF',
+                        borderWidth: 4,
+                        hoverOffset: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '70%',
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                font: {
+                                    family: "'Noto Sans Bengali', sans-serif"
+                                }
+                            }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    if (context.parsed !== null) {
+                                        label += formatCurrency(context.parsed);
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            const ctxExpenseBreakdown = document.getElementById('expenseBreakdownChart').getContext('2d');
+            expenseBreakdownChart = new Chart(ctxExpenseBreakdown, {
+                type: 'pie',
+                data: {
+                    labels: ['বাসা ভাড়া', 'ইউটিলিটি', 'যাতায়াত', 'খাবার', 'অন্যান্য'],
+                    datasets: [{
+                        data: [0, 0, 0, 0, 0],
+                         backgroundColor: ['#588157', '#3A5A40', '#A3B18A', '#DAD7CD', '#DDA15E'],
+                        borderColor: '#FFFFFF',
+                        borderWidth: 2,
+                        hoverOffset: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                         legend: {
+                            position: 'bottom',
+                             labels: {
+                                font: {
+                                    family: "'Noto Sans Bengali', sans-serif"
+                                }
+                            }
+                        },
+                         tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    if (context.parsed !== null) {
+                                        label += formatCurrency(context.parsed);
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            const ctxFinancialTrends = document.getElementById('financialTrendsChart').getContext('2d');
+            financialTrendsChart = new Chart(ctxFinancialTrends, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        {
+                            label: 'মোট আয়',
+                            data: [],
+                            borderColor: '#588157',
+                            tension: 0.1,
+                            fill: false,
+                            font: { family: "'Noto Sans Bengali', sans-serif" }
+                        },
+                        {
+                            label: 'মোট খরচ',
+                            data: [],
+                            borderColor: '#DDA15E',
+                            tension: 0.1,
+                            fill: false,
+                            font: { family: "'Noto Sans Bengali', sans-serif" }
+                        },
+                        {
+                            label: 'মাসিক সঞ্চয়',
+                            data: [],
+                            borderColor: '#60A5FA',
+                            tension: 0.1,
+                            fill: false,
+                            font: { family: "'Noto Sans Bengali', sans-serif" }
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                font: {
+                                    family: "'Noto Sans Bengali', sans-serif"
+                                }
+                            }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    if (context.parsed.y !== null) {
+                                        label += formatCurrency(context.parsed.y);
+                                    }
+                                    return label;
+                                }
+                            },
+                             titleFont: {
+                                font: { family: "'Noto Sans Bengali', sans-serif" }
+                            },
+                             bodyFont: {
+                                font: { family: "'Noto Sans Bengali', sans-serif" }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            ticks: {
+                                font: {
+                                    family: "'Noto Sans Bengali', sans-serif"
+                                }
+                            }
+                        },
+                        y: {
+                            ticks: {
+                                callback: function(value) {
+                                    return formatCurrency(value);
+                                },
+                                font: {
+                                    family: "'Noto Sans Bengali', sans-serif"
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Firebase Auth State Listener - THIS IS THE CENTRAL POINT FOR UI SWITCHING
+            onAuthStateChanged(auth, async (user) => {
+                console.log("onAuthStateChanged triggered. User:", user ? user.uid : "null");
+                if (user) {
+                    // User is signed in
+                    userId = user.uid;
+                    userEmail = user.email;
+                    
+                    // Try to get display name from Auth object first
+                    userName = user.displayName; 
+
+                    // If displayName is not set, try fetching from Firestore profile
+                    if (!userName) {
+                        console.log("Display name not in Auth. Fetching from Firestore profile.");
+                        const profileDocRef = doc(db, `artifacts/${firebaseConfig.projectId}/users/${userId}/profile`, 'userProfile');
+                        const docSnap = await getDoc(profileDocRef);
+                        if (docSnap.exists() && docSnap.data().name) {
+                            userName = docSnap.data().name;
+                            console.log("Name found in Firestore profile:", userName);
+                        } else {
+                            userName = userEmail; // Fallback to email if name not found
+                            console.log("Name not found in Firestore profile. Falling back to email:", userName);
+                        }
+                    }
+                    showDashboardUI();
+                } else {
+                    // User is signed out
+                    console.log("User is signed out.");
+                    userId = null;
+                    userEmail = null;
+                    userName = null;
+                    showAuthUI();
+                }
+            });
+
+            // Input field change listener to update dashboard immediately (no auto-save)
+            const inputs = document.querySelectorAll('.financial-input');
+            inputs.forEach(input => {
+                input.addEventListener('input', () => {
+                    const parts = input.id.split('_');
+                    const category = parts[0];
+                    const item = parts.slice(1).join('_'); // Handle items like 'monthly_amount'
+                    const value = parseFloat(input.value) || 0;
+
+                    if (financialData[category] && financialData[category][item] !== undefined) {
+                        financialData[category][item] = value;
+                    }
+                    updateDashboard(); // Update display elements
+                    // saveFinancialData() is not called here, as manual save button is used
+                });
+            });
+
+            // Accordion button functionality
+            const accordionButtons = document.querySelectorAll('.accordion-button');
+            accordionButtons.forEach(button => {
+                button.addEventListener('click', () => {
+                    const content = button.nextElementSibling;
+                    const isActive = button.classList.contains('active');
+
+                    // Close all other accordions
+                    accordionButtons.forEach(btn => {
+                        btn.classList.remove('active');
+                        btn.nextElementSibling.style.maxHeight = null;
+                        btn.querySelector('span:last-child').style.transform = 'rotate(0deg)';
+                    });
+
+                    // Open/close the clicked accordion
+                    if (!isActive) {
+                        button.classList.add('active');
+                        content.style.maxHeight = content.scrollHeight + "px";
+                        button.querySelector('span:last-child').style.transform = 'rotate(180deg)';
+                    }
+                });
+            });
+
+            // Initialize month and year selectors
+            const initializeMonthPicker = () => {
+                const monthSelect = document.getElementById('monthSelect');
+                const yearSelect = document.getElementById('yearSelect');
+
+                const populateMonths = () => {
+                    const monthNames = ["জানুয়ারি", "ফেব্রুয়ারি", "মার্চ", "এপ্রিল", "মে", "জুন", "জুলাই", "আগস্ট", "সেপ্টেম্বর", "অক্টোবর", "নভেম্বর", "ডিসেম্বর"];
+                    monthSelect.innerHTML = '';
+                    monthNames.forEach((name, index) => {
+                        const option = document.createElement('option');
+                        option.value = (index + 1).toString().padStart(2, '0');
+                        option.textContent = name;
+                        monthSelect.appendChild(option);
+                    });
+                };
+
+                const populateYears = () => {
+                    yearSelect.innerHTML = '';
+                    const currentYear = new Date().getFullYear();
+                    for (let i = currentYear - 5; i <= currentYear + 1; i++) { // Show current year +/- 5 years
+                        const option = document.createElement('option');
+                        option.value = i.toString();
+                        option.textContent = i.toString();
+                        yearSelect.appendChild(option);
+                    }
+                };
+
+                populateMonths();
+                populateYears();
+
+                // Set initial selected month/year to current date
+                const today = new Date();
+                monthSelect.value = (today.getMonth() + 1).toString().padStart(2, '0');
+                yearSelect.value = today.getFullYear().toString();
+
+                // Update data when month or year selection changes
+                const updateCurrentMonthYear = () => {
+                    currentMonthYear = `${yearSelect.value}-${monthSelect.value}`;
+                    loadFinancialData(); // Load data for the newly selected month/year
+                };
+
+                monthSelect.addEventListener('change', updateCurrentMonthYear);
+                yearSelect.addEventListener('change', updateCurrentMonthYear);
+
+                // Initial data load based on current selected month/year (handled by onAuthStateChanged after user is known)
+                // updateCurrentMonthYear() is initially called by onAuthStateChanged after user is confirmed.
+            };
+            initializeMonthPicker(); // Call once DOM is loaded
+
+            // Assign event listeners to new feature buttons
+            document.getElementById('generateInsightButton').addEventListener('click', generateFinancialInsight);
+            document.getElementById('downloadPdfButton').addEventListener('click', generatePdfSummary);
+            document.getElementById('categorizeTransactionButton').addEventListener('click', categorizeTransaction);
+            document.getElementById('saveDataButton').addEventListener('click', saveFinancialData); // Manual Save Button
+        });
+    </script>
+    <style>
+        body {
+            font-family: 'Noto Sans Bengali', sans-serif;
+            background-color: #FDFBF7;
+            color: #3a3a3a;
+        }
+        .chart-container {
+            position: relative;
+            margin-left: auto;
+            margin-right: auto;
+            height: 300px;
+            width: 100%;
+            max-width: 400px;
+            max-height: 400px;
+        }
+        @media (min-width: 768px) {
+            .chart-container {
+                height: 350px;
+            }
+        }
+        .large-chart-container {
+            position: relative;
+            margin-left: auto;
+            margin-right: auto;
+            height: 400px;
+            width: 100%;
+            max-width: 800px;
+            max-height: 500px;
+        }
+        @media (min-width: 768px) {
+            .large-chart-container {
+                height: 450px;
+            }
+        }
+        .card {
+            background-color: #FFFFFF;
+            border: 1px solid #E5E7EB;
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+            transition: all 0.3s ease-in-out;
+        }
+        .accordion-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.5s ease-in-out;
+        }
+        .input-field {
+            width: 100%;
+            padding: 0.75rem;
+            border-radius: 0.5rem;
+            border: 1px solid #D1D5DB;
+            background-color: #F9FAFB;
+            transition: border-color 0.2s;
+        }
+        .input-field:focus {
+            outline: none;
+            border-color: #A3B18A;
+        }
+        .accordion-button {
+            background-color: #F3F4F6;
+            border: 1px solid #E5E7EB;
+            color: #374151;
+        }
+        .accordion-button.active {
+            background-color: #A3B18A;
+            color: white;
+        }
+        .progress-bar-container {
+            width: 100%;
+            background-color: #e0e0e0;
+            border-radius: 0.25rem;
+            overflow: hidden;
+            height: 0.75rem;
+            margin-top: 0.25rem;
+        }
+        .progress-bar {
+            height: 100%;
+            width: 0%;
+            transition: width 0.3s ease-in-out;
+            border-radius: 0.25rem;
+        }
+    </style>
+</head>
+<body class="antialiased">
+
+    <!-- Authentication Container -->
+    <div id="auth-container" class="min-h-screen flex items-center justify-center bg-[#FDFBF7] p-4">
+        <div class="bg-white p-8 rounded-lg shadow-xl w-full max-w-md">
+            <h2 class="text-3xl font-bold text-center text-[#588157] mb-6">লগইন / সাইন আপ</h2>
+            <p id="auth-message" class="text-center"></p>
+
+            <!-- Login Form -->
+            <div id="login-form">
+                <div class="mb-4">
+                    <label for="email-login" class="block text-gray-700 text-sm font-bold mb-2">ইমেল:</label>
+                    <input type="email" id="email-login" class="input-field" placeholder="আপনার ইমেল লিখুন">
+                </div>
+                <div class="mb-6">
+                    <label for="password-login" class="block text-gray-700 text-sm font-bold mb-2">পাসওয়ার্ড:</label>
+                    <input type="password" id="password-login" class="input-field" placeholder="আপনার পাসওয়ার্ড লিখুন">
+                </div>
+                <div class="flex items-center justify-between mb-4">
+                    <button id="login-btn" class="bg-[#588157] hover:bg-[#3A5A40] text-white font-bold py-2 px-4 rounded-lg transition-colors duration-300 w-full mr-2">
+                        লগইন করুন
+                    </button>
+                </div>
+                <p class="text-center text-gray-600 text-sm">
+                    অ্যাকাউন্ট নেই? <button id="show-signup-btn" class="text-[#588157] hover:text-[#3A5A40] font-bold underline focus:outline-none">সাইন আপ করুন</button>
+                </p>
+            </div>
+
+            <!-- Signup Form -->
+            <div id="signup-form" style="display:none;">
+                 <div class="mb-4">
+                    <label for="name-signup" class="block text-gray-700 text-sm font-bold mb-2">আপনার নাম:</label>
+                    <input type="text" id="name-signup" class="input-field" placeholder="আপনার নাম লিখুন">
+                </div>
+                <div class="mb-4">
+                    <label for="email-signup" class="block text-gray-700 text-sm font-bold mb-2">ইমেল:</label>
+                    <input type="email" id="email-signup" class="input-field" placeholder="আপনার ইমেল লিখুন">
+                </div>
+                <div class="mb-6">
+                    <label for="password-signup" class="block text-gray-700 text-sm font-bold mb-2">পাসওয়ার্ড:</label>
+                    <input type="password" id="password-signup" class="input-field" placeholder="একটি পাসওয়ার্ড সেট করুন (কমপক্ষে ৬ অক্ষর)">
+                </div>
+                <div class="flex items-center justify-between mb-4">
+                    <button id="signup-btn" class="bg-[#DDA15E] hover:bg-[#C98B4C] text-white font-bold py-2 px-4 rounded-lg transition-colors duration-300 w-full mr-2">
+                        সাইন আপ করুন
+                    </button>
+                </div>
+                <p class="text-center text-gray-600 text-sm">
+                    ইতিমধ্যে অ্যাকাউন্ট আছে? <button id="show-login-btn" class="text-[#588157] hover:text-[#3A5A40] font-bold underline focus:outline-none">লগইন করুন</button>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Dashboard Content -->
+    <div id="main-dashboard" class="container mx-auto p-4 sm:p-6 lg:p-8 max-w-7xl" style="display:none;">
+
+        <header class="text-center mb-8">
+            <h1 class="text-3xl sm:text-4xl font-bold text-[#588157]">ব্যক্তিগত অর্থ ব্যবস্থাপনা ড্যাশবোর্ড</h1>
+            <p class="mt-2 text-lg text-gray-600">আপনার আয়-ব্যয়ের হিসাব রাখুন এবং আর্থিক লক্ষ্য অর্জন করুন</p>
+            <div class="flex justify-center items-center mt-2 space-x-4">
+                <p id="userDisplayName" class="text-lg font-semibold text-gray-700">ব্যবহারকারী</p>
+                <button id="signout-btn" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-1 px-3 rounded-lg text-sm transition-colors duration-300">
+                    সাইন আউট
+                </button>
+            </div>
+        </header>
+
+        <main>
+            <!-- Financial Overview Section -->
+            <section id="overview" class="mb-8 card">
+                <h2 class="text-2xl font-bold mb-4 text-center text-[#3A5A40]">আর্থিক সারসংক্ষেপ</h2>
+                <p class="text-center text-gray-600 mb-6">
+                    এটি আপনার নির্বাচিত মাসের আর্থিক অবস্থার একটি চিত্র। নিচের ফর্মগুলোতে আপনার আয় এবং ব্যয়ের তথ্য প্রবেশ করালে এখানকার সংখ্যা এবং চার্টগুলো স্বয়ংক্রিয়ভাবে পরিবর্তিত হবে।
+                </p>
+                <div class="flex flex-col sm:flex-row items-center justify-center space-y-4 sm:space-y-0 sm:space-x-4 mb-6">
+                    <label for="monthSelect" class="font-medium text-gray-700">মাস নির্বাচন করুন:</label>
+                    <select id="monthSelect" class="input-field w-auto sm:w-40"></select>
+                    <label for="yearSelect" class="font-medium text-gray-700">বছর নির্বাচন করুন:</label>
+                    <select id="yearSelect" class="input-field w-auto sm:w-32"></select>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 items-center">
+                    <div class="p-4 bg-green-50 border-l-4 border-green-500 rounded-lg text-center">
+                        <h3 class="font-bold text-lg text-green-800">মোট আয়</h3>
+                        <p id="totalIncomeDisplay" class="text-2xl font-bold text-green-600">৳০</p>
+                    </div>
+                    <div class="p-4 bg-red-50 border-l-4 border-red-500 rounded-lg text-center">
+                        <h3 class="font-bold text-lg text-red-800">মোট খরচ</h3>
+                        <p id="totalExpenseDisplay" class="text-2xl font-bold text-red-600">৳০</p>
+                    </div>
+                    <div class="p-4 bg-blue-50 border-l-4 border-blue-500 rounded-lg text-center">
+                        <h3 class="font-bold text-lg text-blue-800">মোট সঞ্চয় ও বিনিয়োগ</h3>
+                        <p id="totalSavingsDisplay" class="text-2xl font-bold text-blue-600">৳০</p>
+                    </div>
+                    <div class="p-4 bg-purple-50 border-l-4 border-purple-500 rounded-lg text-center">
+                        <h3 class="font-bold text-lg text-purple-800">মোট ঋণ ও দায়</h3>
+                        <p id="totalLiabilitiesDisplay" class="text-2xl font-bold text-purple-600">৳০</p>
+                    </div>
+                    <div class="lg:col-span-2 chart-container">
+                        <canvas id="incomeExpenseChart"></canvas>
+                    </div>
+                    <div class="lg:col-span-2 p-4 bg-yellow-50 border-l-4 border-yellow-500 rounded-lg text-center flex flex-col justify-center items-center">
+                        <h3 class="font-bold text-lg text-yellow-800">আর্থিক স্বাস্থ্য স্কোর</h3>
+                        <p id="financialHealthScoreDisplay" class="text-3xl font-bold text-yellow-600 mt-2">০ (Needs Improvement)</p>
+                        <p class="text-sm text-gray-600 mt-2">আপনার আর্থিক অবস্থার একটি সামগ্রিক মূল্যায়ন। ১০০ মানে চমৎকার।</p>
+                    </div>
+                </div>
+                <div class="text-center mt-6">
+                    <button id="saveDataButton" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-lg transition-colors duration-300">
+                        সেভ করুন
+                    </button>
+                    <p id="saveStatusMessage" class="text-sm mt-2"></p>
+                </div>
+            </section>
+
+            <!-- Data Input Section -->
+            <section id="data-input" class="mb-8 card">
+                <h2 class="text-2xl font-bold mb-4 text-center text-[#3A5A40]">তথ্য প্রবেশ করান</h2>
+                 <p class="text-center text-gray-600 mb-6">
+                    আপনার আর্থিক ব্যবস্থাপনার শুরু এখান থেকেই। নিচের বিভাগগুলোতে আপনার মাসিক আয় এবং বিভিন্ন ধরনের খরচের পরিমাণ নির্ভুলভাবে লিখুন। আপনার প্রতিটি ইনপুট ড্যাশবোর্ডের চিত্রকে আরও নিখুঁত করে তুলবে।
+                </p>
+                <div id="accordion-container" class="space-y-2">
+                    <!-- Income -->
+                    <div>
+                        <button class="accordion-button w-full text-left p-4 rounded-lg font-bold text-lg flex justify-between items-center">
+                            <span>১. আয় (Income)</span>
+                            <span class="transform transition-transform duration-300">&#9662;</span>
+                        </button>
+                        <div class="accordion-content bg-white rounded-b-lg p-4 border border-t-0">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <label class="block">মাসিক বেতন / ইনকাম: <input type="number" id="income_salary" class="input-field financial-input" placeholder="0"></label>
+                                <label class="block">অতিরিক্ত আয়: <input type="number" id="income_extra" class="input-field financial-input" placeholder="0"></label>
+                                <label class="block">উপহার বা বোনাস: <input type="number" id="income_bonus" class="input-field financial-input" placeholder="0"></label>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Fixed Expenses -->
+                    <div>
+                        <button class="accordion-button w-full text-left p-4 rounded-lg font-bold text-lg flex justify-between items-center">
+                           <span>২. নির্ধারিত খরচ ও বাজেট (Fixed Expenses & Budget)</span>
+                           <span class="transform transition-transform duration-300">&#9662;</span>
+                        </button>
+                        <div class="accordion-content bg-white rounded-b-lg p-4 border border-t-0">
+                             <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block mb-1">বাসা ভাড়া (খরচ): <input type="number" id="fixed_rent" class="input-field financial-input" placeholder="0"></label>
+                                    <label class="block">বাসা ভাড়া (বাজেট): <input type="number" id="budget_rent" class="input-field financial-input" placeholder="0"></label>
+                                    <div class="progress-bar-container"><div id="budget_rent_progress" class="progress-bar"></div></div>
+                                    <span class="text-xs text-gray-500"></span>
+                                </div>
+                                <div>
+                                    <label class="block mb-1">ইউটিলিটি বিল (খরচ): <input type="number" id="fixed_utilities" class="input-field financial-input" placeholder="0"></label>
+                                    <label class="block">ইউটিলিটি বিল (বাজেট): <input type="number" id="budget_utilities" class="input-field financial-input" placeholder="0"></label>
+                                    <div class="progress-bar-container"><div id="budget_utilities_progress" class="progress-bar"></div></div>
+                                    <span class="text-xs text-gray-500"></span>
+                                </div>
+                                <div>
+                                    <label class="block mb-1">ইন্টারনেট ও ফোন বিল (খরচ): <input type="number" id="fixed_internet" class="input-field financial-input" placeholder="0"></label>
+                                    <label class="block">ইন্টারনেট ও ফোন বিল (বাজেট): <input type="number" id="budget_internet" class="input-field financial-input" placeholder="0"></label>
+                                    <div class="progress-bar-container"><div id="budget_internet_progress" class="progress-bar"></div></div>
+                                    <span class="text-xs text-gray-500"></span>
+                                </div>
+                                <div>
+                                    <label class="block mb-1">স্কুল/কলেজ ফি (খরচ): <input type="number" id="fixed_fees" class="input-field financial-input" placeholder="0"></label>
+                                    <label class="block">স্কুল/কলেজ ফি (বাজেট): <input type="number" id="budget_fees" class="input-field financial-input" placeholder="0"></label>
+                                    <div class="progress-bar-container"><div id="budget_fees_progress" class="progress-bar"></div></div>
+                                    <span class="text-xs text-gray-500"></span>
+                                </div>
+                                <div>
+                                    <label class="block mb-1">ইএমআই/ঋণের কিস্তি (খরচ): <input type="number" id="fixed_emi" class="input-field financial-input" placeholder="0"></label>
+                                    <label class="block">ইএমআই/ঋণের কিস্তি (বাজেট): <input type="number" id="budget_emi" class="input-field financial-input" placeholder="0"></label>
+                                    <div class="progress-bar-container"><div id="budget_emi_progress" class="progress-bar"></div></div>
+                                    <span class="text-xs text-gray-500"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Variable Expenses -->
+                    <div>
+                         <button class="accordion-button w-full text-left p-4 rounded-lg font-bold text-lg flex justify-between items-center">
+                           <span>৩. পরিবর্তনশীল খরচ ও বাজেট (Variable Expenses & Budget)</span>
+                           <span class="transform transition-transform duration-300">&#9662;</span>
+                        </button>
+                        <div class="accordion-content bg-white rounded-b-lg p-4 border border-t-0">
+                            <!-- New AI-powered Transaction Categorization -->
+                            <div class="mb-4 p-3 bg-gray-100 rounded-lg">
+                                <h4 class="font-semibold text-gray-800 mb-2">লেনদেন ক্যাটাগরি অ্যাসিস্ট্যান্ট ✨</h4>
+                                <label class="block text-sm text-gray-700 mb-1" for="transactionDescriptionInput">লেনদেনের বিবরণ লিখুন:</label>
+                                <div class="flex flex-col sm:flex-row gap-2">
+                                    <input type="text" id="transactionDescriptionInput" class="input-field flex-grow" placeholder="যেমন: বাজার থেকে চাল কিনলাম">
+                                    <button id="categorizeTransactionButton" class="bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-300">
+                                        ক্যাটাগরি নির্ধারণ করুন ✨
+                                    </button>
+                                </div>
+                                <p id="categoryStatus" class="text-sm text-gray-600 mt-2"></p>
+                            </div>
+                            <!-- End New AI-powered Transaction Categorization -->
+
+                            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block mb-1">খাবার ও রান্না (খরচ): <input type="number" id="var_food" class="input-field financial-input" placeholder="0"></label>
+                                    <label class="block">খাবার ও রান্না (বাজেট): <input type="number" id="budget_food" class="input-field financial-input" placeholder="0"></label>
+                                    <div class="progress-bar-container"><div id="budget_food_progress" class="progress-bar"></div></div>
+                                    <span class="text-xs text-gray-500"></span>
+                                </div>
+                                <div>
+                                    <label class="block mb-1">যাতায়াত (খরচ): <input type="number" id="var_transport" class="input-field financial-input" placeholder="0"></label>
+                                    <label class="block">যাতায়াত (বাজেট): <input type="number" id="budget_transport" class="input-field financial-input" placeholder="0"></label>
+                                    <div class="progress-bar-container"><div id="budget_transport_progress" class="progress-bar"></div></div>
+                                    <span class="text-xs text-gray-500"></span>
+                                </div>
+                                <div>
+                                    <label class="block mb-1">চিকিৎসা (খরচ): <input type="number" id="var_medical" class="input-field financial-input" placeholder="0"></label>
+                                    <label class="block">চিকিৎসা (বাজেট): <input type="number" id="budget_medical" class="input-field financial-input" placeholder="0"></label>
+                                    <div class="progress-bar-container"><div id="budget_medical_progress" class="progress-bar"></div></div>
+                                    <span class="text-xs text-gray-500"></span>
+                                </div>
+                                <div>
+                                    <label class="block mb-1">জামাকাপড় (খরচ): <input type="number" id="var_clothing" class="input-field financial-input" placeholder="0"></label>
+                                    <label class="block">জামাকাপড় (বাজেট): <input type="number" id="budget_clothing" class="input-field financial-input" placeholder="0"></label>
+                                    <div class="progress-bar-container"><div id="budget_clothing_progress" class="progress-bar"></div></div>
+                                    <span class="text-xs text-gray-500"></span>
+                                </div>
+                                <div>
+                                    <label class="block mb-1">সামাজিক খরচ (খরচ): <input type="number" id="var_social" class="input-field financial-input" placeholder="0"></label>
+                                    <label class="block">সামাজিক খরচ (বাজেট): <input type="number" id="budget_social" class="input-field financial-input" placeholder="0"></label>
+                                    <div class="progress-bar-container"><div id="budget_social_progress" class="progress-bar"></div></div>
+                                    <span class="text-xs text-gray-500"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Savings & Investments -->
+                    <div>
+                        <button class="accordion-button w-full text-left p-4 rounded-lg font-bold text-lg flex justify-between items-center">
+                            <span>৪. সঞ্চয় ও বিনিয়োগ (Savings & Investments)</span>
+                            <span class="transform transition-transform duration-300">&#9662;</span>
+                        </button>
+                        <div class="accordion-content bg-white rounded-b-lg p-4 border border-t-0">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <label class="block">মাসিক সঞ্চয়ের পরিমাণ: <input type="number" id="savings_monthly_amount" class="input-field financial-input" placeholder="0"></label>
+                                <label class="block">জরুরি ফান্ডে জমা: <input type="number" id="savings_emergency_fund" class="input-field financial-input" placeholder="0"></label>
+                                <label class="block">ব্যাংক ডিপোজিট / মোবাইল ব্যাংকিং: <input type="number" id="savings_bank_deposits" class="input-field financial-input" placeholder="0"></label>
+                                <label class="block">স্বর্ণ / সম্পদ সঞ্চয়: <input type="number" id="savings_gold_assets" class="input-field financial-input" placeholder="0"></label>
+                                <label class="block">সঞ্চয়পত্র / এফডিআর: <input type="number" id="investments_fdr" class="input-field financial-input" placeholder="0"></label>
+                                <label class="block">শেয়ার মার্কেট: <input type="number" id="investments_shares" class="input-field financial-input" placeholder="0"></label>
+                                <label class="block">জমি / সম্পত্তি: <input type="number" id="investments_land" class="input-field financial-input" placeholder="0"></label>
+                                <label class="block">ব্যবসায় বিনিয়োগ: <input type="number" id="investments_business" class="input-field financial-input" placeholder="0"></label>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Loans & Liabilities -->
+                    <div>
+                        <button class="accordion-button w-full text-left p-4 rounded-lg font-bold text-lg flex justify-between items-center">
+                            <span>৫. ঋণ ও দায় (Loans & Liabilities)</span>
+                            <span class="transform transition-transform duration-300">&#9662;</span>
+                        </button>
+                        <div class="accordion-content bg-white rounded-b-lg p-4 border border-t-0">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <label class="block">মোট বকেয়া ঋণ: <input type="number" id="loans_current_outstanding" class="input-field financial-input" placeholder="0"></label>
+                                <label class="block">ক্রেডিট কার্ড বিল: <input type="number" id="loans_credit_card_bill" class="input-field financial-input" placeholder="0"></label>
+                                <label class="block">মাসিক ঋণ পরিশোধ: <input type="number" id="loans_monthly_payment" class="input-field financial-input" placeholder="0"></label>
+                                <div class="col-span-1 md:col-span-2 p-3 bg-blue-50 rounded-lg">
+                                    <h4 class="font-semibold text-blue-800">আনুমানিক ঋণ পরিশোধের সময়: <span id="debtRepaymentDisplay" class="font-bold text-blue-600">০ মাস</span></h4>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+            
+            <!-- Spending Analysis Section -->
+            <section id="analysis" class="mb-8 card">
+                <h2 class="text-2xl font-bold mb-4 text-center text-[#3A5A40]">ব্যয় বিশ্লেষণ</h2>
+                <p class="text-center text-gray-600 mb-6">
+                    আপনার খরচের খাতগুলো এখানে বিস্তারিতভাবে দেখানো হয়েছে। এই চার্টটি আপনাকে বুঝতে সাহায্য করবে কোন খাতে আপনার সবচেয়ে বেশি টাকা ব্যয় হচ্ছে, যা আপনাকে বাজেট পরিকল্পনা এবং খরচ কমানোর সিদ্ধান্ত নিতে সহায়তা করবে।
+                </p>
+                <div class="chart-container">
+                    <canvas id="expenseBreakdownChart"></canvas>
+                </div>
+            </section>
+
+            <!-- Financial Trends Section -->
+            <section id="trends" class="mb-8 card">
+                <h2 class="text-2xl font-bold mb-4 text-center text-[#3A5A40]">আর্থিক প্রবণতা</h2>
+                <p class="text-center text-gray-600 mb-6">
+                    এই চার্টটি আপনার আয়, ব্যয় এবং সঞ্চয়ের ঐতিহাসিক প্রবণতা দেখায়। সময়ের সাথে সাথে আপনার আর্থিক অবস্থার পরিবর্তন বুঝতে এটি সহায়ক।
+                </p>
+                <div class="large-chart-container">
+                    <canvas id="financialTrendsChart"></canvas>
+                </div>
+            </section>
+
+            <!-- AI-Powered Insights Section -->
+            <section id="ai-insights" class="mb-8 card">
+                <h2 class="text-2xl font-bold mb-4 text-center text-[#3A5A40]">আর্থিক অন্তর্দৃষ্টি ও পরামর্শ (AI)</h2>
+                <p class="text-center text-gray-600 mb-6">
+                    আপনার প্রবেশ করা আর্থিক ডেটার উপর ভিত্তি করে একটি কৃত্রিম বুদ্ধিমত্তা-চালিত বিশ্লেষণ এবং পরামর্শ পেতে নিচের বাটনে ক্লিক করুন।
+                </p>
+                <div class="text-center">
+                    <button id="generateInsightButton" class="bg-[#A3B18A] hover:bg-[#8B9F7B] text-white font-bold py-2 px-6 rounded-lg transition-colors duration-300">
+                        পরামর্শ তৈরি করুন
+                    </button>
+                    <div id="aiInsightDisplay" class="mt-4 p-4 bg-gray-50 rounded-lg text-gray-800 text-left">
+                        এখানে আপনার আর্থিক অন্তর্দৃষ্টি প্রদর্শিত হবে।
+                    </div>
+                </div>
+            </section>
+
+            <!-- Financial Goals and Tools Section -->
+            <section id="goals" class="card">
+                 <h2 class="text-2xl font-bold mb-4 text-center text-[#3A5A40]">লক্ষ্য ও পরামর্শ</h2>
+                  <p class="text-center text-gray-600 mb-6">
+                    আর্থিক ব্যবস্থাপনা শুধুমাত্র আয়-ব্যয়ের হিসাব রাখা নয়, বরং ভবিষ্যতের জন্য পরিকল্পনা করা। এই বিভাগে আপনার আর্থিক লক্ষ্য নির্ধারণ এবং তা অর্জনের জন্য কিছু কার্যকরী টুলস ও কৌশলের ধারণা দেওয়া হলো।
+                </p>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="p-6 bg-gray-50 rounded-lg">
+                        <h3 class="text-xl font-bold mb-3 text-gray-800">আর্থিক লক্ষ্য নির্ধারণ</h3>
+                        <ul class="list-disc list-inside space-y-2 text-gray-700">
+                            <li><b>স্বল্পমেয়াদি লক্ষ্য:</b> নতুন মোবাইল ফোন কেনা, ছুটি কাটানো বা জরুরি ফান্ডের জন্য টাকা জমানো।</li>
+                            <li><b>দীর্ঘমেয়াদি লক্ষ্য:</b> জমি বা ফ্ল্যাট কেনা, সন্তানের পড়াশোনা, অবসর জীবনের জন্য পরিকল্পনা।</li>
+                        </ul>
+                    </div>
+                     <div class="p-6 bg-gray-50 rounded-lg">
+                        <h3 class="text-xl font-bold mb-3 text-gray-800">ব্যবস্থাপনার টুলস ও কৌশল</h3>
+                        <ul class="list-disc list-inside space-y-2 text-gray-700">
+                            <li><b>বাজেট তৈরি:</b> প্রতি মাসের শুরুতে একটি বাজেট তৈরি করুন এবং তা মেনে চলার চেষ্টা করুন।</li>
+                            <li><b>রেকর্ড রাখুন:</b> এই অ্যাপটি ব্যবহার করে বা এক্সেল শিটে আপনার প্রতিদিনের খরচ লিখে রাখুন।</li>
+                            <li><b>পর্যালোচনা:</b> মাস শেষে আপনার ব্যয় বিশ্লেষণ করে দেখুন কোথায় খরচ কমানো সম্ভব।</li>
+                            <li><b>সঞ্চয়ের অভ্যাস:</b> বেতন পাওয়ার সাথে সাথেই একটি নির্দিষ্ট পরিমাণ টাকা সঞ্চয়ের জন্য সরিয়ে রাখুন।</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Export Report Section -->
+            <section id="export-report" class="mb-8 card">
+                <h2 class="text-2xl font-bold mb-4 text-center text-[#3A5A40]">রিপোর্ট ডাউনলোড করুন</h2>
+                <p class="text-center text-gray-600 mb-6">
+                    আপনার বর্তমান মাসের আর্থিক ডেটার একটি সংক্ষিপ্ত সারাংশ পিডিএফ ফরম্যাটে ডাউনলোড করুন।
+                </p>
+                <div class="text-center">
+                    <button id="downloadPdfButton" class="bg-[#588157] hover:bg-[#3A5A40] text-white font-bold py-2 px-6 rounded-lg transition-colors duration-300">
+                        পিডিএফ ডাউনলোড করুন
+                    </button>
+                </div>
+            </section>
+        </main>
+    </div>
+</body>
+</html>
